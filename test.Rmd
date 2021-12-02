@@ -1,24 +1,296 @@
 ---
 title: "R Notebook"
 output: github_document
-
-
+---
 
 
 
 premier test de controle
----
 
-This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
-
-Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Ctrl+Shift+Enter*. 
-
-```{r}
-plot(cars)
+```{bash}
+sudo apt-get update -y
+sudo apt-get install -y libglpk-dev 
+sudo apt-get install -y liblzma-dev libbz2-dev
 ```
 
-Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Ctrl+Alt+I*.
+```{r}
+if (!requireNamespace("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+BiocManager::install("BiocStyle")
+BiocManager::install("Rh
+```
 
-When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Ctrl+Shift+K* to preview the HTML file).
 
-The preview shows you a rendered HTML copy of the contents of the editor. Consequently, unlike *Knit*, *Preview* does not run any R code chunks. Instead, the output of the chunk when it was last run in the editor is displayed.
+```{r}
+library("knitr")
+library("BiocStyle")
+.cran_packages <- c("ggplot2","gridExtra", "devtools")
+install.packages(.cran_packages) 
+.bioc_packages <-c("dada2","phyloseq","DECIPHER","phangorn")
+BiocManager::install(.bioc_packages)
+# Load packages into session, and print package version
+sapply(c(.cran_packages, .bioc_packages), require, character.only = TRUE)
+```
+
+```{bash}
+cd ~
+wget https://mothur.s3.us-east-2.amazonaws.com/wiki/miseqsopdata.zip
+unzip miseqsopdata.zip
+```
+
+````{r}
+set.seed(100)
+miseq_path <- "./MiSeq_SOP"
+list.files(miseq_path)
+````
+
+````{r}
+set.seed(100)
+miseq_path <- "/home/rstudio/MiSeq_SOP"
+list.files(miseq_path)
+````
+
+````{r}
+# Sort ensures forward/reverse reads are in same order
+fnFs <- sort(list.files(miseq_path, pattern="_R1_001.fastq"))
+fnRs <- sort(list.files(miseq_path, pattern="_R2_001.fastq"))
+# Extract sample names, assuming filenames have format: SAMPLENAME_XXX.fastq
+sampleNames <- sapply(strsplit(fnFs, "_"), `[`, 1)
+# Specify the full path to the fnFs and fnRs
+fnFs <- file.path(miseq_path, fnFs)
+fnRs <- file.path(miseq_path, fnRs)
+fnFs[1:3]
+````
+````{r}
+## [1] "./MiSeq_SOP/F3D0_S188_L001_R1_001.fastq"   "./MiSeq_SOP/F3D1_S189_L001_R1_001.fastq"  
+## [3] "./MiSeq_SOP/F3D141_S207_L001_R1_001.fastq"
+````
+
+
+```{r}
+plotQualityProfile(fnFs[1:2])
+```
+#les noirs signifient les scores de meilleure qualite, les oranges pas trop bien
+
+#filepath permet de creer un fichier.Montre les fichiers filtrés
+```{r}
+filt_path <-file.path(miseq_path, "filtered")
+# Place filtered files in filtered/ subdirectory
+if(!file_test("-d", filt_path)) dir.create(filt_path)
+filtFs <- file.path(filt_path, paste0(sampleNames, "_F_filt.fastq.gz"))
+filtRs <- file.path(filt_path, paste0(sampleNames, "_R_filt.fastq.gz"))
+```
+
+#out variable recoit les resultats de Filterandtrime: c(2 vecteurs de 2 valeurs)
+#juste de score de qualite 240 et 260() ca c'est pour V4 
+#maxN nombre maximun de base indefini dans la sequence, sequence avec N mauvaise qualite de sequencage, enleve le Forward et le reverse en meme temps.
+#trunc on enleve tous les bases quand on arrive a tous les scores de qualite de 20
+#rm vzerifie qu'il ya aucune sequance de fixe(phage)
+#fichier compresse, multithread on va utiliser tous  les de la machine
+
+#out fait sorti les reads filtre qualite
+```{r}
+out <- filterAndTrim(fnFs, filtFs, fnRs, filtRs, truncLen=c(240,160),
+              maxN=0, maxEE=c(2,2), truncQ=2, rm.phix=TRUE,
+              compress=TRUE, multithread=FALSE)
+head(out)
+```
+
+
+#DADA2 corrige les ereurs des reads
+#les sequence identique a 2 fois on les garde une seule fois=dereoFastq
+#verbose explique moi ce que tu fais, met des lignes
+#derepFs recoit les noms des echantillons
+```{r}
+derepFs <- derepFastq(filtFs, verbose=TRUE)
+derepRs <- derepFastq(filtRs, verbose=TRUE)
+# Name the derep-class objects by the sample names
+names(derepFs) <- sampleNames
+names(derepRs) <- sampleNames
+```
+#donne les erreures des amorces f
+apres filtre qualite recoit
+```{r}
+errF <- learnErrors(filtFs, multithread=TRUE)
+```
+#donne les ereeurs des amprces R
+```{r}
+errR <- learnErrors(filtRs, multithread=TRUE, verbose=TRUE)
+```
+
+#permet de donner le graphe des erreurs
+#la moyenne des scores de qualite, peut importe l'orde des nucleotides,
+#en ordonne frequence des erreurs observees par DADA2, chaque poiunt represente une base, en haut frequence d'apparition des erreusrs en fonction du score de quelite. T2A T remplace par A
+```{r}
+plotErrors(errF)
+plotErrors(errR)
+````
+
+#recoit les resultats de ? permet de corriger
+#on obtient un jeu de donne sans ereeurs. On fait les OTU car on a erreur de sequencage ? si il ya pas d'erreur on fait ASV chaque variant de sequencage 
+```{r}
+dadaFs <- dada(derepFs, err=errF, multithread=TRUE)
+```
+
+```{r}
+dadaRs <- dada(derepRs, err=errR, multithread=TRUE)
+```
+
+#une liste de liste, R fait des objets avec des objets, des listes, des noms etcc
+
+```{r}
+dadaFs[[1]]
+```
+
+#on prend les F et les R qu'on va aligner, assemblage des 2 fragments, cette fonction s'applique au jeux de donnees bien?
+```{r}
+mergers <- mergePairs(dadaFs, derepFs, dadaRs, derepRs)
+```
+
+#construire une table de sequence, combien de fois on a eu de ASV dans chacun des echantillons. Construit une table de ligne: ASV, colonne:Echantillon. Exclut les echantillons qui contient le mot mog: communaute arrtifi cree par differe souches, avec ca on peut creer notre pipeline, si on ne trouve pas ce qu'on a mis dans mok, ca va s"eliminer
+```{r}
+seqtabAll <- makeSequenceTable(mergers[!grepl("Mock", names(mergers))])
+table(nchar(getSequences(seqtabAll)))
+```
+
+#noc: communaute arrtifi cree par differe souches, avec ca on peut creer notre pipeline, si on ne trouve pas ce qu'on a mis dans mok, ca va s"eliminer, evaluer notre pipeline qu'on a applique aux donnees, #removedenovo resolution des chimeres, hybride: vient d'un autre 16S et de l'autre 16S, explication de monsiue. #Creer des sequences artificielles qui n'existent pas dans la nature, 2 variables donnent plus de discrimination
+#creer un nouveau
+#si on fait la somme des chimeres elle rest rare dans la??
+```{r}
+seqtabNoC <- removeBimeraDenovo(seqtabAll)
+```
+
+#assigment taxinomique avec silva,
+#Assigner un taxonomie
+#silva138 version fermentée pour dada2, au lieu de l'autre dan le tuto
+```{bash}
+cd ~
+wget  https://zenodo.org/record/4587955/files/silva_nr99_v138.1_train_set.fa.gz
+```
+
+```{r}
+fastaRef <-"/home/rstudio/silva_nr99_v138.1_train_set.fa.gz"
+taxTab<-assignTaxonomy(seqtabNoC, refFasta=fastaRef, multithread=TRUE)
+unname(head(taxTab))
+```
+
+#construction de l'arbre avec beta diversite
+#unifranc proche, elle sont equivalents, 2 ASV dont proche sont equivalente au niveau fonctionelle
+```{r}
+seqs <- getSequences(seqtabNoC)
+names(seqs) <- seqs # This propagates to the tip labels of the tree
+alignment <- AlignSeqs(DNAStringSet(seqs), anchor=NA,verbose=FALSE)
+```
+
+
+#pour faire ca il faut aller chercher les sequences
+```{r}
+phangAlign <- phyDat(as(alignment, "matrix"), type="DNA")
+dm <- dist.ml(phangAlign)
+treeNJ <- NJ(dm) # Note, tip order != sequence order
+fit = pml(treeNJ, data=phangAlign)
+fitGTR <- update(fit, k=4, inv=0.2)
+fitGTR <- optim.pml(fitGTR, model="GTR", optInv=TRUE, optGamma=TRUE,
+        rearrangement = "stochastic", control = pml.control(trace = 0))
+detach("package:phangorn", unload=TRUE)
+```
+#voir les proteines toutttt
+```{r}
+samdf <- read.csv("https://raw.githubusercontent.com/spholmes/F1000_workflow/master/data/MIMARKS_Data_combined.csv",header=TRUE)
+samdf$SampleID <- paste0(gsub("00", "", samdf$host_subject_id), "D", samdf$age-21)
+samdf <- samdf[!duplicated(samdf$SampleID),] # Remove dupicate entries for reverse reads
+rownames(seqtabAll) <- gsub("124", "125", rownames(seqtabAll)) # Fix discrepancy
+all(rownames(seqtabAll) %in% samdf$SampleID) # TRUE
+```
+#dollar chercher des informations dans un objet complexesam, permet de donner l'age, nom des lignes #de samdf vont recevoir les information dans sampleID nom des echantillons
+#keppcoll(vecteur constituee d'une suiste de colonne), colonne qu'on veut garder et recoit u vcteur qu'on veut?? Recoit les lignes de qui sont dans
+```{r}
+rownames(samdf) <- samdf$SampleID
+keep.cols <- c("collection_date", "biome", "target_gene", "target_subfragment",
+"host_common_name", "host_subject_id", "age", "sex", "body_product", "tot_mass",
+"diet", "family_relationship", "genotype", "SampleID") 
+samdf <- samdf[rownames(seqtabAll), keep.cols]
+````
+
+#prune=enlever
+```{r}
+ps <- phyloseq(otu_table(seqtabNoC, taxa_are_rows=FALSE), 
+               sample_data(samdf), 
+               tax_table(taxTab),phy_tree(fitGTR$tree))
+ps <- prune_samples(sample_names(ps) != "Mock", ps) # Remove mock sample
+```
+
+#
+```{r}
+# Create table, number of features for each phyla
+table(tax_table(ps)[, "Phylum"], exclude = NULL)
+```
+
+#prevalence present dans un grand nombre d'echantillon, prevalence en fonction de l'abondance. Fraction de l'echantillon ou on va trouver?????
+
+```{r}
+ps <- subset_taxa(ps, !is.na(Phylum) & !Phylum %in% c("", "uncharacterized"))
+```
+
+```{r}
+# Compute prevalence of each feature, store as data.frame
+prevdf = apply(X = otu_table(ps),
+               MARGIN = ifelse(taxa_are_rows(ps), yes = 1, no = 2),
+               FUN = function(x){sum(x > 0)})
+# Add taxonomy and total read counts to this data.frame
+prevdf = data.frame(Prevalence = prevdf,
+                    TotalAbundance = taxa_sums(ps),
+                    tax_table(ps))
+```
+
+```{r}
+plyr::ddply(prevdf, "Phylum", function(df1){cbind(mean(df1$Prevalence),sum(df1$Prevalence))})
+```
+
+```{r}
+# Define phyla to filter
+filterPhyla = c("Fusobacteria", "Deinococcus-Thermus")
+# Filter entries with unidentified Phylum.
+ps1 = subset_taxa(ps, !Phylum %in% filterPhyla)
+ps1
+```
+
+#prevalence
+```{r}
+# Subset to the remaining phyla
+prevdf1 = subset(prevdf, Phylum %in% get_taxa_unique(ps1, "Phylum"))
+ggplot(prevdf1, aes(TotalAbundance, Prevalence / nsamples(ps),color=Phylum)) +
+  # Include a guess for parameter
+  geom_hline(yintercept = 0.05, alpha = 0.5, linetype = 2) +  geom_point(size = 2, alpha = 0.7) +
+  scale_x_log10() +  xlab("Total Abundance") + ylab("Prevalence [Frac. Samples]") +
+  facet_wrap(~Phylum) + theme(legend.position="none")
+```
+
+
+```{r}
+.cran_packages <- c( "shiny","miniUI", "caret", "pls", "e1071", "ggplot2", "randomForest", "dplyr", "ggrepel", "nlme", "devtools",
+                  "reshape2", "PMA", "structSSI", "ade4",
+                  "ggnetwork", "intergraph", "scales")
+.github_packages <- c("jfukuyama/phyloseqGraphTest")
+.bioc_packages <- c("genefilter", "impute")
+```
+
+```{r}
+.inst <- .cran_packages %in% installed.packages()
+if (any(!.inst)){
+  install.packages(.cran_packages[!.inst],repos = "http://cran.rstudio.com/")
+}
+```
+
+```{r}
+.inst <- .github_packages %in% installed.packages()
+if (any(!.inst)){
+  devtools::install_github(.github_packages[!.inst])
+}
+```
+
+```{r}
+.inst <- .bioc_packages %in% installed.packages()
+if(any(!.inst)){BiocManager::install(.bioc_packages[!.inst])
+}
+```
